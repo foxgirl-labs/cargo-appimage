@@ -2,7 +2,10 @@ use anyhow::{bail, Context, Result};
 use cargo_toml::Value;
 use fs_extra::dir::CopyOptions;
 use std::{
-    fs, io::{Read, Write}, path::Path, process::{Command, Stdio}
+    fs,
+    io::{Read, Write},
+    path::Path,
+    process::{Command, Stdio},
 };
 
 fn main() -> Result<()> {
@@ -128,6 +131,7 @@ fn main() -> Result<()> {
     for currentbin in meta.bin {
         let name = currentbin.name.unwrap_or(pkg.name.clone());
         let appdirpath = std::path::Path::new(&target_prefix).join(name.clone() + ".AppDir");
+        let applications_dir = appdirpath.join("usr").join("share").join("applications");
 
         // For clearing old cache
         let _ = fs::remove_dir_all(appdirpath.clone());
@@ -137,6 +141,9 @@ fn main() -> Result<()> {
 
         fs_extra::dir::create_all(appdirpath.join("usr/bin"), true)
             .with_context(|| format!("Error creating {}", appdirpath.join("usr/bin").display()))?;
+
+        fs_extra::dir::create_all(&applications_dir, true)
+            .with_context(|| format!("Error creating {}", &applications_dir.display()))?;
 
         if link_deps {
             if !std::path::Path::new("libs").exists() {
@@ -287,14 +294,34 @@ fn main() -> Result<()> {
                                                     {}",
             name, name, file_stem.to_str().unwrap(), startup_wm_class_text);
 
+        // Generate desktop file
         std::fs::write(
-            appdirpath.join(desktop_file.as_ref().unwrap()), desktop_file_contents).with_context(|| {
-                format!(
-                    "Error writing desktop file {}",
-                    appdirpath.join(desktop_file.as_ref().unwrap()).display()
-                )
-            }
-        )?;
+            applications_dir.join(desktop_file.as_ref().unwrap()),
+            desktop_file_contents,
+        )
+        .with_context(|| {
+            format!(
+                "Error writing desktop file {}",
+                applications_dir
+                    .join(desktop_file.as_ref().unwrap())
+                    .display()
+            )
+        })?;
+
+        // Generate symlink to desktop file
+        std::os::unix::fs::symlink(
+            applications_dir.join(desktop_file.as_ref().unwrap()),
+            appdirpath.join(desktop_file.as_ref().unwrap()),
+        )
+        .with_context(|| {
+            format!(
+                "Error symlinking {} to {}",
+                applications_dir
+                    .join(desktop_file.as_ref().unwrap())
+                    .display(),
+                appdirpath.join(desktop_file.as_ref().unwrap()).display()
+            )
+        })?;
 
         std::fs::copy(
             std::path::PathBuf::from(std::env::var("HOME")?)
@@ -319,6 +346,8 @@ fn main() -> Result<()> {
 
         std::fs::create_dir_all(format!("{}/appimage", &target_prefix))
             .context("Unable to create output dir")?;
+
+        // The version environment variable wipes out the symlink
         Command::new("appimagetool")
             .args(bin_args)
             .arg(&format!("{}/appimage/{}.AppImage", &target_prefix, &name))
